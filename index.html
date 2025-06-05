@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 기반 동양하루살이 대발생 예측 시스템</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <!-- Chosen Palette: Urban Ecology -->
+    <!-- Application Structure Plan: The SPA is designed as a map-centric dashboard, inspired by the poisonmap.mfds.go.kr layout. It now uses a 3-column grid layout on large screens, with the left sidebar, the map section, and the regional details/charts section each occupying an equal horizontal width. This aims to provide all critical information (filters, map, and detailed data with charts) without vertical scrolling. The 'Overview' and 'System Intro' sections remain as supporting information outside the main dashboard for a comprehensive user journey. -->
+    <!-- Visualization & Content Choices:
+        - Overview KPIs: Goal: Quick assessment. Method: Styled cards. Justification: Provides at-a-glance status vital for officials.
+        - Interactive Map: Goal: Spatially locate risk. Method: HTML/CSS with image background and interactive hotspot overlays. Justification: Central to the "poisonmap" feel, visually identifies high-risk areas. Hotspots update dynamically based on selected filters.
+        - Prediction Chart (Line): Goal: Understand temporal trends. Method: Chart.js Line Chart. Justification: Visualizes outbreak probability over time, essential for scheduling proactive measures. Updates based on selected hotspot and year.
+        - Factor Analysis Chart (Radar): Goal: Compare influencing factors. Method: Chart.js Radar Chart. Justification: Effectively communicates the multi-faceted nature of outbreaks. Updates based on selected hotspot and year.
+        - Dynamic Filters (Year, Factor): Goal: Enable user exploration. Method: HTML dropdowns with JS event listeners. Justification: Allows users to drill down into specific contexts, mimicking the interactive capabilities of the reference site.
+        - All choices use Canvas or HTML/CSS, avoiding SVG/Mermaid as required. -->
+    <!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
+    <style>
+        body {
+            font-family: 'Noto Sans KR', sans-serif;
+            background-color: #F8F7F4; /* Warm Neutral Background */
+        }
+        /* Adjusted chart-container for reduced size */
+        .chart-container {
+            position: relative;
+            width: 100%;
+            max-width: 700px; /* Reduced max-width */
+            margin-left: auto;
+            margin-right: auto;
+            height: 250px; /* Reduced height */
+            max-height: 30vh; /* Reduced max-height */
+        }
+        @media (min-width: 768px) {
+            .chart-container {
+                height: 350px; /* Reduced height on medium screens */
+            }
+        }
+        .nav-link {
+            transition: color 0.3s, border-bottom-color 0.3s;
+        }
+        .nav-link.active, .nav-link:hover {
+            color: #4A5568; /* Darker Gray */
+            border-bottom-color: #6B7280; /* Gray */
+        }
+        .map-hotspot {
+            transition: all 0.3s ease-in-out;
+            cursor: pointer;
+        }
+        .map-hotspot:hover, .map-hotspot.active {
+            transform: scale(1.2);
+            z-index: 10;
+        }
+        .kpi-card {
+            background-color: #FFFFFF;
+            border: 1px solid #E5E7EB;
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            text-align: center;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+        }
+        .risk-low { background-color: #D1FAE5; color: #065F46; }
+        .risk-medium { background-color: #FEF3C7; color: #92400E; }
+        .risk-high { background-color: #FEE2E2; color: #991B1B; }
+        /* Map background style - Using the provided image */
+        .map-background {
+            background-image: url('https://content-fetcher.google-mkz.com/v1/api/image/uploaded:image_e25e75.png-5f430903-0999-4de0-a74c-37722ffd16a2');
+            background-size: cover; /* Changed to cover to fill container */
+            background-repeat: no-repeat;
+            background-position: center;
+            flex-grow: 1; /* Allow map background to grow vertically */
+            position: relative; /* Needed for hotspot positioning */
+            height: 100%; /* Ensure it fills parent */
+            min-height: 250px; /* Minimum height for map visibility */
+        }
+        .dashboard-container {
+            display: grid; /* Changed to grid for 3-column layout */
+            grid-template-columns: 1fr; /* Default single column on small screens */
+            gap: 2rem;
+        }
+        @media (min-width: 1024px) {
+            .dashboard-container {
+                grid-template-columns: 1fr 1fr 1fr; /* Three equal columns on large screens */
+                align-items: stretch; /* Ensure grid items stretch to fill row height */
+                min-height: calc(100vh - 4rem - 32px); /* viewport height - header - padding */
+            }
+        }
+        .sidebar {
+            padding: 1.5rem;
+            background-color: #FFFFFF;
+            border-radius: 0.75rem;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+            display: flex; /* Make sidebar a flex container for its children */
+            flex-direction: column; /* Stack children vertically */
+        }
+        /* No fixed flex-basis for sidebar now, it's handled by grid */
+        .map-section {
+            background-color: #FFFFFF;
+            padding: 1.5rem;
+            border-radius: 0.75rem;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+            display: flex;
+            flex-direction: column;
+            flex-grow: 1; /* Allow map section to grow within its grid cell */
+        }
+        #prediction-details-and-charts { /* New container for details and charts */
+            background-color: #FFFFFF;
+            padding: 1.5rem;
+            border-radius: 0.75rem;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+            display: flex;
+            flex-direction: column;
+            flex-grow: 1; /* Allow this entire section to grow within its grid cell */
+        }
+        /* Adjusted flexible-chart-container for more uniform distribution within #prediction-details-and-charts */
+        .flexible-chart-container {
+            position: relative;
+            width: 100%;
+            flex-grow: 1; /* Allow chart container to grow within its flex parent */
+            min-height: 100px; /* Reduced min-height */
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        /* Target direct chart parents to ensure equal vertical distribution */
+        #prediction-details-and-charts > div.flex-1 {
+            display: flex;
+            flex-direction: column;
+            flex: 1; /* Ensure equal vertical distribution for chart sections */
+            margin-top: 1rem; /* Reduced margin for spacing */
+        }
+        #prediction-details-and-charts > div.flex-1:first-of-type {
+            margin-top: 0; /* Remove top margin for the first chart section */
+        }
+
+        /* Font size adjustments */
+        .text-xl { font-size: 1.125rem; /* ~18px, was 20px */ line-height: 1.75rem; }
+        .text-3xl { font-size: 1.875rem; /* ~30px, was 30px, adjust for h2 */ line-height: 2.25rem; }
+        .sm\:text-4xl { font-size: 2.25rem; /* ~36px, was 36px, adjust for h2 */ line-height: 2.5rem; }
+        .text-lg { font-size: 1rem; /* ~16px, was 18px */ line-height: 1.5rem; }
+        .text-4xl { font-size: 2.25rem; /* ~36px, was 48px */ line-height: 2.5rem; }
+        .text-2xl { font-size: 1.5rem; /* ~24px, was 24px, for h4 */ line-height: 2rem; }
+
+        /* Specific adjustments for smaller elements if needed */
+        .sidebar h3, #prediction-details-and-charts h3 { font-size: 1.125rem; /* text-xl -> text-lg */ line-height: 1.75rem; }
+        #prediction-details-and-charts h4 { font-size: 1rem; /* text-lg -> text-base */ line-height: 1.5rem; }
+        #prediction-details-and-charts .text-2xl { font-size: 1.25rem; /* text-2xl -> text-xl */ line-height: 1.75rem; }
+    </style>
+</head>
+<body class="text-gray-800">
+
+    <header class="bg-white/80 backdrop-blur-md sticky top-0 z-20 shadow-sm">
+        <nav class="container mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex-shrink-0">
+                    <h1 class="text-lg font-bold text-gray-800">AI 동양하루살이 대발생 예측</h1>
+                </div>
+                <div class="hidden md:block">
+                    <div class="ml-10 flex items-baseline space-x-4">
+                        <a href="#overview" class="nav-link px-3 py-2 text-sm font-medium text-gray-500 border-b-2 border-transparent">개요</a>
+                        <a href="#dashboard" class="nav-link px-3 py-2 text-sm font-medium text-gray-500 border-b-2 border-transparent">대시보드</a>
+                        <a href="#about" class="nav-link px-3 py-2 text-sm font-medium text-gray-500 border-b-2 border-transparent">시스템 소개</a>
+                    </div>
+                </div>
+            </div>
+        </nav>
+    </header>
+
+    <main class="container mx-auto p-4 sm:p-6 lg:p-8">
+        
+        <section id="overview" class="mb-16 scroll-mt-16">
+            <div class="text-center mb-8">
+                <h2 class="text-2xl font-bold text-gray-900 sm:text-3xl">한강의 '팅커벨', 동양하루살이 대발생 현황</h2>
+                <p class="mt-4 text-base text-gray-600">불편을 주는 곤충과 건강한 생태계의 지표, 두 얼굴을 가진 동양하루살이를 과학적으로 이해하고 관리합니다.</p>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div id="kpi-risk" class="kpi-card">
+                    <h3 class="text-base font-medium text-gray-500">현재 수도권 대발생 위험도</h3>
+                    <p class="mt-2 text-3xl font-bold text-yellow-600">보통</p>
+                    <div class="mt-1 text-sm text-gray-500">일부 지역에서 개체 수 증가 관측</div>
+                </div>
+                <div id="kpi-peak" class="kpi-card">
+                    <h3 class="text-base font-medium text-gray-500">다음 대발생 예측 시기</h3>
+                    <p class="mt-2 text-3xl font-bold text-gray-900">8월 하순</p>
+                    <div class="mt-1 text-sm text-gray-500">기온 상승 시 앞당겨질 수 있음</div>
+                </div>
+                <div id="kpi-factors" class="kpi-card">
+                    <h3 class="text-base font-medium text-gray-500">주요 영향 요인</h3>
+                    <div class="mt-3 flex justify-center space-x-4 text-gray-700">
+                        <span class="font-semibold">🌡️ 수온</span>
+                        <span class="font-semibold">💡 빛 공해</span>
+                        <span class="font-semibold">💧 수질</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="dashboard" class="mb-16 scroll-mt-16">
+            <div class="text-center mb-8">
+                <h2 class="text-2xl font-bold text-gray-900 sm:text-3xl">대발생 모니터링 대시보드</h2>
+                <p class="mt-4 text-base text-gray-600">AI 예측 시스템의 핵심 데이터를 시각화하고 필터링하여 동양하루살이 발생 현황을 탐색합니다.</p>
+            </div>
+
+            <div class="dashboard-container">
+                <div class="sidebar">
+                    <h3 class="text-lg font-bold mb-4">현재 분석 설정</h3>
+                    <div class="bg-gray-50 py-3 px-4 rounded-md mb-6">
+                        <div class="flex items-center mb-1">
+                            <span class="font-medium w-20 text-gray-600">선택 연도:</span>
+                            <span id="selected-year" class="font-semibold text-gray-800">2024년</span>
+                        </div>
+                        <div class="flex items-center">
+                            <span class="font-medium w-20 text-gray-600">주요 요인:</span>
+                            <span id="selected-factor" class="font-semibold text-gray-800">전체</span>
+                        </div>
+                    </div>
+
+                    <div class="mb-6">
+                        <label for="year-select" class="block text-sm font-medium text-gray-700 mb-2">연도 선택</label>
+                        <select id="year-select" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md shadow-sm">
+                            <option value="2024">2024년</option>
+                            <option value="2023">2023년</option>
+                            <option value="2022">2022년</option>
+                            <option value="allYears">전체 연도</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-6">
+                        <label for="factor-select" class="block text-sm font-medium text-gray-700 mb-2">주요 요인 필터</label>
+                        <select id="factor-select" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md shadow-sm">
+                            <option value="all">전체</option>
+                            <option value="temp">수온</option>
+                            <option value="light">빛 공해</option>
+                            <option value="water">수질</option>
+                            <option value="rain">강수량</option>
+                            <option value="predator">천적</option>
+                        </select>
+                    </div>
+
+                    <h3 class="text-lg font-bold mb-4 mt-8">데이터 인사이트</h3>
+                    <div class="bg-white p-6 rounded-lg shadow-inner mb-4">
+                        <h4 class="text-base font-bold mb-4 text-center">수온과 개체수 관계</h4>
+                        <div class="chart-container">
+                            <canvas id="tempCorrelationChart"></canvas>
+                        </div>
+                        <p class="text-sm text-gray-500 mt-4 text-center">선택 연도의 수온과 동양하루살이 개체수 간의 상관관계를 보여줍니다.</p>
+                    </div>
+                </div>
+
+                <div class="map-section">
+                    <h3 class="text-lg font-bold mb-4 text-center">수도권 대발생 위험 지도</h3>
+                    <div class="relative w-full rounded-md overflow-hidden map-background">
+                        <!-- Hotspots with adjusted positions for the new Seoul map image -->
+                        <!-- 김포/고양 -->
+                        <div id="hotspot-1" data-id="1" class="map-hotspot absolute top-[40%] left-[15%]" title="김포/고양"></div>
+                        <!-- 여의도/영등포 -->
+                        <div id="hotspot-2" data-id="2" class="map-hotspot absolute top-[53%] left-[45%]" title="여의도/영등포"></div>
+                        <!-- 잠실/강동 -->
+                        <div id="hotspot-3" data-id="3" class="map-hotspot absolute top-[60%] left-[75%]" title="잠실/강동"></div>
+                        <!-- 하남/남양주 -->
+                        <div id="hotspot-4" data-id="4" class="map-hotspot absolute top-[45%] left-[88%]" title="하남/남양주"></div>
+                    </div>
+                    <p class="text-xs text-gray-400 mt-2 text-center">
+                        <span class="text-red-500 font-semibold">참고:</span> 이 지도는 실제 구글 지도 API를 사용하지 않고, 수도권의 간략화된 지리 정보를 활용한 시뮬레이션입니다. (지도의 가로/세로 비율에 따라 이미지가 잘릴 수 있습니다.)
+                    </p>
+                </div>
+                
+                <div id="prediction-details-and-charts" class="map-section flex flex-col">
+                    <div class="flex-none">
+                        <h3 class="text-lg font-bold mb-2">지역별 상세 정보</h3>
+                        <p id="details-text" class="text-base text-gray-600 mb-4">지도에서 관심 지역을 클릭하여 상세 정보를 확인하세요.</p>
+                        <div id="details-content" class="hidden space-y-3">
+                            <h4 id="details-name" class="text-xl font-bold"></h4>
+                            <div class="flex items-center">
+                                <span class="w-24 text-gray-500">위험 등급</span>
+                                <span id="details-risk" class="font-bold px-3 py-1 text-sm rounded-full"></span>
+                            </div>
+                            <div class="flex items-center">
+                                <span class="w-24 text-gray-500">수온</span>
+                                <span id="details-temp" class="font-semibold text-gray-800"></span>
+                            </div>
+                            <div class="flex items-center">
+                                <span class="w-24 text-gray-500">빛 공해 지수</span>
+                                <span id="details-light" class="font-semibold text-gray-800"></span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex-1 flex flex-col mt-6">
+                        <h3 class="text-lg font-bold mb-2">주간 대발생 확률</h3>
+                        <div class="flexible-chart-container">
+                            <canvas id="predictionChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="flex-1 flex flex-col mt-6">
+                        <h3 class="text-lg font-bold mb-2">주요 환경 요인 분석</h3>
+                        <div class="flexible-chart-container">
+                            <canvas id="factorAnalysisChart"></canvas>
+                        </div>
+                        <p class="text-sm text-gray-500 mt-4 text-center">선택 연도 및 지역의 대발생에 영향을 미치는 각 요인의 상대적 중요도를 보여줍니다.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="about" class="scroll-mt-16 bg-white p-8 rounded-lg shadow-lg">
+             <div class="text-center mb-8">
+                <h2 class="text-2xl font-bold text-gray-900 sm:text-3xl">시스템 작동 원리</h2>
+                <p class="mt-4 text-base text-gray-600">AI 예측 시스템은 어떻게 작동할까요? 데이터 수집부터 예측까지의 과정을 소개합니다.</p>
+            </div>
+            <div class="flex flex-col md:flex-row justify-center items-center gap-4 text-center">
+                <div class="p-6 rounded-lg bg-gray-50 w-full md:w-1/4">
+                    <div class="text-3xl mb-2">📊</div>
+                    <h4 class="font-bold text-base">1. 데이터 수집</h4>
+                    <p class="text-sm text-gray-600 mt-1">기상청, 환경부, 국립생물자원관 등의 공공 데이터를 실시간으로 수집합니다.</p>
+                </div>
+                <div class="text-xl text-gray-400 font-sans mx-2 hidden md:block">&rarr;</div>
+                <div class="p-6 rounded-lg bg-gray-50 w-full md:w-1/4">
+                    <div class="text-3xl mb-2">🤖</div>
+                    <h4 class="font-bold text-base">2. AI 모델 분석</h4>
+                    <p class="text-sm text-gray-600 mt-1">시계열 예측, 서식지 분석 등 AI 모델이 복합적인 관계를 학습하고 분석합니다.</p>
+                </div>
+                <div class="text-xl text-gray-400 font-sans mx-2 hidden md:block">&rarr;</div>
+                <div class="p-6 rounded-lg bg-gray-50 w-full md:w-1/4">
+                    <div class="text-3xl mb-2">📈</div>
+                    <h4 class="font-bold text-base">3. 예측 및 시각화</h4>
+                    <p class="text-sm text-gray-600 mt-1">분석 결과를 지도와 차트로 시각화하여 사용자에게 명확한 정보를 제공합니다.</p>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <footer class="bg-gray-800 text-white mt-16">
+        <div class="container mx-auto py-6 px-4 sm:px-6 lg:px-8 text-center text-sm">
+            <p>&copy; 2024 AI-based Mayfly Outbreak Prediction System. All rights reserved.</p>
+            <p class="mt-1 text-gray-400">본 시스템은 공공 데이터를 기반으로 한 연구용 프로젝트입니다.</p>
+        </div>
+    </footer>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // Helper function to average arrays
+            const averageArrays = (arrs) => {
+                const validArrs = arrs.filter(arr => Array.isArray(arr) && arr.length > 0);
+                if (validArrs.length === 0) return [];
+                const length = validArrs[0].length;
+                return Array.from({ length }, (_, i) => {
+                    const sum = validArrs.reduce((acc, curr) => acc + (curr[i] || 0), 0);
+                    return sum / validArrs.length;
+                });
+            };
+
+            // Helper function to average risk levels
+            const averageRiskLevels = (riskLevels) => {
+                const map = { 'low': 1, 'medium': 2, 'high': 3 };
+                const validRiskLevels = riskLevels.filter(rl => rl && map[rl] !== undefined);
+                if (validRiskLevels.length === 0) return 'medium'; // Default to medium if no valid risk levels
+                const sum = validRiskLevels.reduce((acc, rl) => acc + map[rl], 0);
+                const avg = sum / validRiskLevels.length;
+                if (avg < 1.5) return 'low';
+                if (avg < 2.5) return 'medium';
+                return 'high';
+            };
+
+            const mockData = {
+                hotspots: {
+                    "2024": [
+                        { id: 1, name: "김포/고양", risk: "보통", riskLevel: 'medium', temp: 21.5, light: 7 },
+                        { id: 2, name: "여의도/영등포", risk: "낮음", riskLevel: 'low', temp: 22.1, light: 6 },
+                        { id: 3, name: "잠실/강동", risk: "높음", riskLevel: 'high', temp: 22.8, light: 9 },
+                        { id: 4, name: "하남/남양주", risk: "높음", riskLevel: 'high', temp: 22.5, light: 8 },
+                    ],
+                    "2023": [
+                        { id: 1, name: "김포/고양", risk: "낮음", riskLevel: 'low', temp: 19.8, light: 5 },
+                        { id: 2, name: "여의도/영등포", risk: "보통", riskLevel: 'medium', temp: 20.5, light: 7 },
+                        { id: 3, name: "잠실/강동", risk: "높음", riskLevel: 'high', temp: 21.9, light: 8 },
+                        { id: 4, name: "하남/남양주", risk: "보통", riskLevel: 'medium', temp: 20.2, light: 6 },
+                    ],
+                    "2022": [
+                        { id: 1, name: "김포/고양", risk: "높음", riskLevel: 'high', temp: 22.0, light: 8 },
+                        { id: 2, name: "여의도/영등포", risk: "낮음", riskLevel: 'low', temp: 21.0, light: 5 },
+                        { id: 3, name: "잠실/강동", risk: "보통", riskLevel: 'medium', temp: 20.5, light: 7 },
+                        { id: 4, name: "하남/남양주", risk: "높음", riskLevel: 'high', temp: 21.8, light: 9 },
+                    ]
+                },
+                predictionSeries: {
+                    "2024": {
+                        "1": [30, 45, 60, 75, 70, 55, 40],
+                        "2": [15, 20, 25, 30, 28, 22, 18],
+                        "3": [65, 70, 85, 95, 90, 80, 70],
+                        "4": [50, 60, 70, 80, 75, 65, 50],
+                    },
+                    "2023": {
+                        "1": [20, 30, 40, 55, 50, 35, 25],
+                        "2": [25, 35, 45, 50, 48, 38, 30],
+                        "3": [50, 55, 65, 70, 68, 60, 55],
+                        "4": [40, 50, 60, 65, 60, 50, 40],
+                    },
+                    "2022": {
+                        "1": [50, 65, 70, 85, 80, 70, 60],
+                        "2": [10, 15, 20, 25, 22, 18, 15],
+                        "3": [40, 50, 60, 70, 65, 55, 45],
+                        "4": [60, 70, 80, 90, 85, 75, 65],
+                    }
+                },
+                tempCorrelation: {
+                    "2024": {
+                        labels: ['4월', '5월', '6월', '7월', '8월', '9월', '10월'],
+                        tempData: [13, 17, 21, 24, 25, 22, 18],
+                        populationData: [20, 55, 90, 40, 85, 50, 25]
+                    },
+                    "2023": {
+                        labels: ['4월', '5월', '6월', '7월', '8월', '9월', '10월'],
+                        tempData: [12, 16, 20, 23, 24, 21, 17],
+                        populationData: [15, 40, 70, 30, 75, 45, 20]
+                    },
+                    "2022": {
+                        labels: ['4월', '5월', '6월', '7월', '8월', '9월', '10월'],
+                        tempData: [14, 18, 22, 25, 26, 23, 19],
+                        populationData: [25, 60, 95, 50, 90, 55, 30]
+                    }
+                },
+                factorAnalysis: {
+                    "2024": {
+                        "1": [7, 8, 6, 4, 5],
+                        "2": [8, 6, 7, 3, 4],
+                        "3": [9, 9, 8, 6, 7],
+                        "4": [8, 9, 8, 5, 6],
+                        "default": [8, 7, 7, 5, 6]
+                    },
+                    "2023": {
+                        "1": [6, 7, 5, 5, 4],
+                        "2": [7, 7, 6, 4, 5],
+                        "3": [8, 8, 7, 5, 6],
+                        "4": [7, 8, 7, 4, 5],
+                        "default": [7, 7, 6, 4, 5]
+                    },
+                    "2022": {
+                        "1": [8, 9, 7, 5, 6],
+                        "2": [6, 5, 6, 2, 3],
+                        "3": [7, 7, 6, 4, 5],
+                        "4": [9, 9, 9, 6, 7],
+                        "default": [8, 8, 7, 5, 6]
+                    }
+                }
+            };
+
+            // Calculate 'allYears' aggregated data
+            mockData.hotspots.allYears = mockData.hotspots["2024"].map((spot, index) => {
+                const yearsData = ['2022', '2023', '2024'].map(year => mockData.hotspots[year][index]).filter(Boolean); // Filter out any undefined entries
+                if (yearsData.length === 0) return null; // Handle case where all years might be missing for a hotspot
+                const averagedRiskLevel = averageRiskLevels(yearsData.map(d => d.riskLevel));
+                return {
+                    id: spot.id,
+                    name: spot.name,
+                    risk: averagedRiskLevel === 'low' ? '낮음' : averagedRiskLevel === 'medium' ? '보통' : '높음',
+                    riskLevel: averagedRiskLevel,
+                    temp: parseFloat(averageArrays(yearsData.map(d => [d.temp]))[0].toFixed(1)),
+                    light: Math.round(averageArrays(yearsData.map(d => [d.light]))[0])
+                };
+            }).filter(Boolean); // Remove any null entries from map if all data was missing
+
+            mockData.predictionSeries.allYears = {};
+            ['1', '2', '3', '4', 'default'].forEach(id => {
+                const seriesData = ['2022', '2023', '2024'].map(year => mockData.predictionSeries[year][id]).filter(Boolean);
+                mockData.predictionSeries.allYears[id] = averageArrays(seriesData).map(val => Math.round(val));
+            });
+
+            mockData.tempCorrelation.allYears = {
+                labels: mockData.tempCorrelation["2024"].labels,
+                tempData: averageArrays(['2022', '2023', '2024'].map(year => mockData.tempCorrelation[year].tempData).filter(Boolean)).map(val => parseFloat(val.toFixed(1))),
+                populationData: averageArrays(['2022', '2023', '2024'].map(year => mockData.tempCorrelation[year].populationData).filter(Boolean)).map(val => Math.round(val))
+            };
+
+            mockData.factorAnalysis.allYears = {};
+            ['1', '2', '3', '4', 'default'].forEach(id => {
+                const factorData = ['2022', '2023', '2024'].map(year => mockData.factorAnalysis[year][id]).filter(Boolean);
+                mockData.factorAnalysis.allYears[id] = averageArrays(factorData).map(val => Math.round(val));
+            });
+
+
+            let predictionChart, tempCorrelationChart, factorAnalysisChart;
+            let currentSelectedHotspotId = null; // Track currently selected hotspot
+            let currentSelectedYear = '2024'; // Default to 2024 initially
+            let currentSelectedFactor = 'all';
+
+            const riskClassMap = {
+                'low': 'risk-low',
+                'medium': 'risk-medium',
+                'high': 'risk-high'
+            };
+
+            const updateDashboard = () => {
+                const year = currentSelectedYear;
+                const factor = currentSelectedFactor;
+
+                document.getElementById('selected-year').textContent = `${year === 'allYears' ? '전체 연도' : year + '년'}`;
+                document.getElementById('selected-factor').textContent = factor === 'all' ? '전체' :
+                                                                          factor === 'temp' ? '수온' :
+                                                                          factor === 'light' ? '빛 공해' :
+                                                                          factor === 'water' ? '수질' :
+                                                                          factor === 'rain' ? '강수량' :
+                                                                          factor === 'predator' ? '천적' : '알 수 없음';
+                
+                // Update hotspot colors on map
+                document.querySelectorAll('.map-hotspot').forEach(hotspotEl => {
+                    const hotspotId = hotspotEl.dataset.id;
+                    // Use the current year's data or 'allYears' data
+                    const spotsForYear = mockData.hotspots[year];
+                    const spotData = spotsForYear ? spotsForYear.find(s => s.id == hotspotId) : null;
+                    const dot = hotspotEl.querySelector('div');
+                    if (dot && spotData) {
+                        dot.className = `w-4 h-4 rounded-full border-2 border-white shadow-lg ${riskClassMap[spotData.riskLevel].replace('text-', 'bg-').replace('-600', '-500')}`;
+                    }
+                });
+
+                // Update charts
+                updateTempCorrelationChart(year);
+
+                // Ensure prediction and factor analysis charts are always updated based on current state
+                const hotspotIdForCharts = currentSelectedHotspotId || "default";
+                updatePredictionChart(hotspotIdForCharts, year);
+                updateFactorAnalysisChart(hotspotIdForCharts, year, factor);
+            };
+
+            const setupHotspots = () => {
+                // Initial setup can use any year's hotspot data, updateDashboard will set correct colors
+                Object.values(mockData.hotspots["2024"]).forEach(spot => { 
+                    const el = document.getElementById(`hotspot-${spot.id}`);
+                    if (el) {
+                        const dot = document.createElement('div');
+                        dot.className = `w-4 h-4 rounded-full border-2 border-white shadow-lg`; // Initial class, will be updated by updateDashboard
+                        el.appendChild(dot);
+
+                        el.addEventListener('click', () => {
+                            currentSelectedHotspotId = spot.id;
+                            updateDetails(spot.id, currentSelectedYear); // Updates text details and triggers chart update via updateDashboard
+                            document.querySelectorAll('.map-hotspot').forEach(h => h.classList.remove('active'));
+                            el.classList.add('active');
+                            updateDashboard(); // Re-render dashboard to update charts correctly
+                        });
+                    }
+                });
+            };
+            
+            const updateDetails = (id, year) => {
+                const spot = mockData.hotspots[year].find(s => s.id === id);
+                if (!spot) return;
+
+                document.getElementById('details-text').classList.add('hidden');
+                const content = document.getElementById('details-content');
+                content.classList.remove('hidden');
+
+                document.getElementById('details-name').textContent = spot.name;
+                const riskEl = document.getElementById('details-risk');
+                riskEl.textContent = spot.risk;
+                riskEl.className = `font-bold px-3 py-1 text-sm rounded-full ${riskClassMap[spot.riskLevel]}`;
+                document.getElementById('details-temp').textContent = `${spot.temp}°C`;
+                document.getElementById('details-light').textContent = `${spot.light} / 10`;
+
+                // Chart updates are now handled by updateDashboard()
+            };
+
+            const createPredictionChart = () => {
+                const ctx = document.getElementById('predictionChart').getContext('2d');
+                const labels = Array.from({ length: 7 }, (_, i) => `+${i + 1}일`);
+                predictionChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: '대발생 확률 (%)',
+                            data: mockData.predictionSeries[currentSelectedYear]["default"] || [],
+                            borderColor: '#16A34A',
+                            backgroundColor: 'rgba(22, 163, 74, 0.1)',
+                            fill: true,
+                            tension: 0.4
+                        }]
+                    },
+                    options: chartOptions({ yLabel: '확률 (%)' })
+                });
+            };
+
+            const updatePredictionChart = (id, year) => {
+                predictionChart.data.datasets[0].data = mockData.predictionSeries[year][id] || mockData.predictionSeries[year]["default"];
+                predictionChart.update();
+            };
+
+            const createTempCorrelationChart = () => {
+                const ctx = document.getElementById('tempCorrelationChart').getContext('2d');
+                const dataForYear = mockData.tempCorrelation[currentSelectedYear];
+                tempCorrelationChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: dataForYear.labels,
+                        datasets: [
+                            {
+                                label: '평균 수온 (°C)',
+                                data: dataForYear.tempData,
+                                borderColor: '#3B82F6',
+                                backgroundColor: 'rgba(59, 130, 246, 0.2)',
+                                yAxisID: 'yTemp',
+                                tension: 0.3
+                            },
+                            {
+                                label: '상대 개체수 지수',
+                                data: dataForYear.populationData,
+                                borderColor: '#F97316',
+                                backgroundColor: 'rgba(249, 115, 22, 0.2)',
+                                yAxisID: 'yPopulation',
+                                tension: 0.3
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: {
+                            mode: 'index',
+                            intersect: false,
+                        },
+                        scales: {
+                            yTemp: {
+                                type: 'linear',
+                                display: true,
+                                position: 'left',
+                                title: { display: true, text: '수온 (°C)', color: '#3B82F6' },
+                                grid: { drawOnChartArea: false }
+                            },
+                            yPopulation: {
+                                type: 'linear',
+                                display: true,
+                                position: 'right',
+                                title: { display: true, text: '개체수 지수', color: '#F97316' },
+                            }
+                        },
+                        plugins: {
+                           tooltip: {
+                                callbacks: {
+                                    label: function(context) {
+                                        let label = context.dataset.label || '';
+                                        if (label) {
+                                            label += ': ';
+                                        }
+                                        if (context.parsed.y !== null) {
+                                            label += context.parsed.y;
+                                            if (context.dataset.yAxisID === 'yTemp') {
+                                                label += '°C';
+                                            }
+                                        }
+                                        return label;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+            };
+
+            const updateTempCorrelationChart = (year) => {
+                const dataForYear = mockData.tempCorrelation[year];
+                tempCorrelationChart.data.labels = dataForYear.labels;
+                tempCorrelationChart.data.datasets[0].data = dataForYear.tempData;
+                tempCorrelationChart.data.datasets[1].data = dataForYear.populationData;
+                tempCorrelationChart.update();
+            };
+            
+            const createFactorAnalysisChart = () => {
+                const ctx = document.getElementById('factorAnalysisChart').getContext('2d');
+                const dataForYear = mockData.factorAnalysis[currentSelectedYear];
+                factorAnalysisChart = new Chart(ctx, {
+                    type: 'radar',
+                    data: {
+                        labels: ['수온', '빛 공해', '수질', '강수량', '천적'],
+                        datasets: [{
+                            label: '영향도',
+                            data: dataForYear.default,
+                            backgroundColor: 'rgba(75, 85, 99, 0.2)',
+                            borderColor: 'rgba(75, 85, 99, 1)',
+                            borderWidth: 2,
+                            pointBackgroundColor: 'rgba(75, 85, 99, 1)'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            r: {
+                                angleLines: { display: true },
+                                suggestedMin: 0,
+                                suggestedMax: 10,
+                                pointLabels: { font: { size: 14 } }
+                            }
+                        },
+                        plugins: { legend: { display: false } }
+                    }
+                });
+            };
+
+            const updateFactorAnalysisChart = (id, year, factor) => {
+                let data = mockData.factorAnalysis[year][id] || mockData.factorAnalysis[year]["default"];
+                let labels = ['수온', '빛 공해', '수질', '강수량', '천적'];
+
+                if (factor !== 'all') {
+                    const factorIndex = labels.indexOf(
+                        factor === 'temp' ? '수온' :
+                        factor === 'light' ? '빛 공해' :
+                        factor === 'water' ? '수질' :
+                        factor === 'rain' ? '강수량' :
+                        factor === 'predator' ? '천적' : ''
+                    );
+                    if (factorIndex > -1) {
+                        data = Array(labels.length).fill(0);
+                        data[factorIndex] = (mockData.factorAnalysis[year][id] && mockData.factorAnalysis[year][id][factorIndex] !== undefined) ? mockData.factorAnalysis[year][id][factorIndex] : 0;
+                    }
+                }
+                factorAnalysisChart.data.datasets[0].data = data;
+                factorAnalysisChart.update();
+            }
+
+            const chartOptions = (config) => ({
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: { display: true, text: config.yLabel }
+                    },
+                    x: {
+                        ticks: {
+                            callback: function(value, index, values) {
+                                const label = this.getLabelForValue(value);
+                                if (label.length > 16) {
+                                    return label.substring(0, 16) + '...';
+                                }
+                                return label;
+                            }
+                        }
+                    }
+                },
+                plugins: { legend: { display: false } }
+            });
+
+            // Event listeners for filters
+            document.getElementById('year-select').addEventListener('change', (event) => {
+                currentSelectedYear = event.target.value;
+                updateDashboard(); // This will now correctly update all charts including prediction and factor analysis
+                // Ensure hotspot details reset if 'allYears' is selected and a hotspot was active
+                if (currentSelectedHotspotId) {
+                    // Re-update text details as updateDetails is not called by updateDashboard for filter changes
+                    updateDetails(currentSelectedHotspotId, currentSelectedYear);
+                } else {
+                     document.getElementById('details-text').classList.remove('hidden');
+                     document.getElementById('details-content').classList.add('hidden');
+                }
+            });
+
+            document.getElementById('factor-select').addEventListener('change', (event) => {
+                currentSelectedFactor = event.target.value;
+                updateDashboard(); // This will now correctly update factor analysis chart
+            });
+
+
+            // Smooth scrolling for nav links
+            document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+                anchor.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    document.querySelector(this.getAttribute('href')).scrollIntoView({
+                        behavior: 'smooth'
+                    });
+                });
+            });
+
+            // Active nav link on scroll
+            const sections = document.querySelectorAll('section[id]');
+            const navLinks = document.querySelectorAll('.nav-link');
+            const observer = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        navLinks.forEach(link => {
+                            link.classList.toggle('active', link.getAttribute('href').substring(1) === entry.target.id);
+                        });
+                    }
+                });
+            }, { rootMargin: '-50% 0px -50% 0px' });
+
+            sections.forEach(section => observer.observe(section));
+
+            // Initializations
+            setupHotspots();
+            createPredictionChart();
+            createTempCorrelationChart();
+            createFactorAnalysisChart();
+            updateDashboard(); // Initial dashboard update
+        });
+    </script>
+</body>
+</html>
